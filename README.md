@@ -1,5 +1,3 @@
-# Blocking vs Non-Blocking
-
 # Event Loop là gì và hoạt động thế nào?
 ## Một số khái niệm cơ bản
 - Stack: là một vùng nhớ đặc biệt trên con chip máy tính phục vụ cho quá trình thực thi các dòng lệnh mà cụ thể là các hàm. Hàm chẳng qua là một nhóm các lệnh và chương trình thì gồm một nhóm các hàm phối hợp với nhau. Mỗi khi một hàm được triệu gọi thì nó sẽ được đẩy vào một hàng đợi đặc biệt có tên là stack. Stack là một hàng đợi kiểu LIFO (Last In First Out) nghĩa là vào đầu tiên thì ra sau cùng. Một hàm chỉ được lấy ra khỏi stack khi nó hoàn thành và return.
@@ -121,3 +119,39 @@ Nói chung, khi các đoạn mã được thực thi, Event Loop cuối cùng s�
 
 ## Close callback
 Nếu một socket hoặc handle bị đóng đột ngột (ví dụ socket.destroy()), sự kiện 'close' sẽ được phát ra trong giai đoạn này. Nếu không, nó sẽ được phát ra thông qua process.nextTick().
+
+
+# Non-blocking I/O
+![](https://i.imgur.com/kF77pbd.png)
+- callback để xử lý kết quả của các tác vụ I/O không đồng bộ để không chặn luồng chính. Bất kì hoạt động nào gây ra độ trễ sẽ được đi cùng với một hàm callback để thực hiện khi nó hoàn thành tại thời điểm nào đó. Các hoạt động này được thực thi song song bằng cách sử dụng Thread Pool và các hàm callback bản chất vẫn được thực thi ở trên luồng chính.
+- Node.js Standard Library được thực thi sẽ chạy ở background (không phải trong Call Stack) bằng cách sử dụng nhóm luồng (Thread Pool) trong thư viện libuv. Ví dụ: fs là một hàm sẽ được thực thi ở background và khi hoàn thành, nó sẽ thêm hàm callback vào Event Queue.
+- Event Queue chứa các hàm callback đang được chờ đợi cho đến khi Event Loop đưa chúng trở lại Call Stack và thực thi.
+- Event Loop sẽ di chuyển các hàm gọi lại từ Event Queue sang Call Stack để được thực thi bởi luồng chính. Khi Call Stack trống và Event Queue đang có các hàm chờ xử lý, Event Loop sẽ di chuyển chúng sang Call Stack và chúng sẽ được thực thi bởi luồng chính.
+
+Do đó, bất kỳ hoạt động I/O nào tốn thời gian sẽ không chặn luồng chính mà được chuyển tới Standard Library để được thực thi ở background. Do đó luồng chính vẫn tiếp tục được thực thi tiếp, đó gọi là bản chất không chặn (non-blocking). Khi hoạt động I/O hoàn tất, hàm callback của nó sẽ được thực thi bởi luồng chính bằng cách sử dụng Event Loop và Event Queue như đã nói ở trên.
+
+## I/O trong Standard Library
+Các hoạt động I/O dưới đây được coi là tốn thời gian và sẽ được đưa vào thực hiện ở một nhóm luồng gọi là Thread Pool:
+
+### File Systems
+Các hoạt động được xử lý bởi module fs như đọc hoặc ghi vào tệp. Ví dụ fs.write, fs.readStream
+
+### Network Calls
+Các cuộc gọi yêu cầu mạng như dns.resolve, dns.lookup, http.get, https.post, socket.connect…
+
+### Timers
+Các hoạt động liên quan đến setTimeout, setImmediate hoặc setInterval. Ngay cả hàm setTimeout(cb, 0) với 0ms độ trễ vẫn sẽ được đẩy đến Event Queue và được thực thi theo thứ tự. Do đó, setTimeout không thể đảm bảo thời gian chính xác mà là xác định thời gian tối thiểu hàm callback có thể được thực hiện.
+
+Cần lưu ý rằng không phải tất cả tác vụ tốn thời gian đều là tác vụ I/O. Ví dụ: tác vụ chuyên sâu của CPU trong một vòng lặp không phải là tác vụ I/O và nó sẽ chặn luồng chính. Do đó node.js được coi là không phù hợp với các tác vụ chuyên sâu về CPU mà là phù hợp hơn với các tác vụ chuyên sâu về I/O.
+
+```js
+for (var i = 0; i < 10000; i++) {
+   crypto.createHash(); // CPU intensive task
+   // or
+   sleep(2); // CPU intensive task
+}
+console.log('After CPU intensive task');
+```
+Ở đây, tác vụ chuyên sâu CPU sẽ chặn luồng chính và không thực thi lệnh console ngay lập tức như khi với các hoạt động I/O không đồng bộ. Đơn giản là do tác vụ chuyên sâu CPU sẽ ràng buộc CPU phải được thực thi ngay lập tức, còn đối với tác vụ ràng buộc I/O, nó được chuyển tới libuv để được xử lý không đồng bộ.
+
+Cần lưu ý rằng nếu Call Stack đang không trống do các tác vụ chuyên sâu CPU này chặn luồng chính, nó sẽ không thể thực thi bất kỳ thứ gì từ Event Loop của bất kỳ tác vụ I/O nào đang chờ xử lý và sẽ dẫn đến tình trạng thắt cổ chai.
